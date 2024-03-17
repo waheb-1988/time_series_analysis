@@ -11,4 +11,5 @@
 
 ## 1. reproduce the python code using R for TS
 ## 2. torch package
-##
+## 3. map of all lon/lat in the map
+## 3. create a line plot for all states (after calculating average mean)
