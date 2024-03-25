@@ -13,3 +13,5 @@
 ## 2. torch package
 ## 3. map of all lon/lat in the map
 ## 3. create a line plot for all states (after calculating average mean)
+
+## create the hourly data for 5 years (2019-2023) : DONE
