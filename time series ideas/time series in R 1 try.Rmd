@@ -1,0 +1,234 @@
+---
+title: "time series"
+author: "Ayoub Asri"
+date: "2024-03-26"
+output: 
+  html_document:
+    toc: true
+    float_toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R packages
+
+```{r}
+library(tidyverse)
+```
+
+## data
+
+```{r}
+data <- read_csv("./data/data_article/hourly_5y_data.csv")
+```
+
+## time series packages
+
+```{r}
+library(tseries)
+library(timetk)
+library(readxl)
+library(tidyquant)
+library(scales)
+library(forecast)   #  forecasting pkg
+library(sweep)      #  Broom tidiers for forecast pkg
+library(timekit)
+library(broom)
+library(ggthemes)
+```
+## exploration
+
+```{r}
+data %>% glimpse()
+```
+
+```{r}
+data %>% 
+  summarize_all(.funs = ~sum(is.na(.)))
+```
+
+```{r}
+data %>% 
+  summarize(mean = mean(measure),
+            max = max(measure),
+            min = mean(measure),
+            IQR = IQR(measure))
+```
+
+```{r}
+data %>% 
+  ggplot(aes(x = time, y = measure)) +
+  geom_line() +
+  theme_bw()
+```
+## train/test split 
+
+## ts object
+
+frequency is used to precise the frequency of data (here 24 is used to precise that is hourly data)
+
+1. create the ts for all the data
+```{r}
+tsdata <- ts(data$measure,frequency = 24)
+tsdata %>% head()
+```
+
+
+```{r}
+plot.ts(tsdata)
+```
+
+```{r}
+autoplot(tsdata) + theme_bw()
+```
+
+2. train 4 years : test = 2023
+
+```{r}
+train <- tsdata %>% window(end = c(1461,24))
+test <- tsdata %>% window(start = c(1462,1))
+```
+
+```{r}
+autoplot(train) +
+  autolayer(test,series = "test")
+```
+
+
+
+
+
+# ARIMA model 
+
+stl is better than decompose() because it use non-linear approximation
+
+```{r}
+decomp = stl(train,s.window = "periodic")
+ 
+deseasonal_ts <- seasadj(decomp)
+ 
+autoplot(decomp)
+```
+
+```{r}
+autoplot(deseasonal_ts) 
+```
+```{r}
+sweep::sw_tidy_decomp(decomp) %>% head()
+```
+
+## some ideas
+```{r}
+ggtsdisplay(train)
+```
+
+```{r}
+ggtsdisplay(diff(diff(train),lag = 24)) 
+```
+
+## Autocorrelation plots 
+
+### at level
+```{r}
+library(patchwork)
+```
+
+
+```{r}
+p1 <- ggAcf(train,lag=40) + labs(title="measure at level") + theme_bw()
+p2 <- ggPacf(train,lag=40) + labs(title="measure at level") + theme_bw()
+
+p1 + p2
+```
+
+```{r}
+p1 <- ggAcf(diff(train),lag=40) + labs(title="measure first difference ") + theme_bw()
+p2 <- ggPacf(diff(train),lag=40) + labs(title="measure first difference") + theme_bw()
+
+p1 + p2
+```
+
+```{r}
+p1 <- ggAcf(diff(diff(train), lag = 24),lag=40) + labs(title="measure 24 lag") + theme_bw()
+p2 <- ggPacf(diff(diff(train),lag = 24),lag=40) + labs(title="measure 24 lag") + theme_bw()
+
+p1 + p2
+```
+
+
+```{r}
+p1 <- ggAcf(diff(diff(train)),lag=40) + labs(title="measure second difference ") + theme_bw()
+p2 <- ggPacf(diff(diff(train)),lag=40) + labs(title="measure second difference") + theme_bw()
+
+p1 + p2
+```
+
+## ADF test
+
+### level
+```{r}
+sw_glance(adf.test(train))
+```
+```{r}
+sw_glance(adf.test(diff(train,differences = 1)))
+```
+```{r}
+sw_glance(adf.test(diff(train,differences = 2)))
+```
+```{r}
+sw_glance(adf.test(diff(train,lag = 24)))
+```
+
+```{r}
+sw_glance(adf.test(diff(train,differences = 1,lag = 24)))
+```
+```{r}
+sw_glance(adf.test(diff(train,differences = 2,lag = 24)))
+```
+# Auto Arima
+
+```{r}
+aar1 <- auto.arima(train, seasonal=TRUE,stepwise = T,trace = T,D = 1,max.p = 3,max.q = 3)
+```
+```{r}
+sw_tidy(aar1)
+```
+
+```{r}
+sw_glance(aar1)
+```
+```{r}
+sw_augment(aar1) %>% head()
+```
+```{r}
+autoplot(train) +
+  autolayer(aar1$fitted,series="Fit")
+```
+
+## forecast on test
+
+```{r}
+f1 <- forecast(aar1,h = 6543)
+#f1 %>% head()
+```
+
+```{r}
+summary(aar1)
+```
+
+```{r}
+aar1 %>%
+  forecast(h=6543) %>%
+  autoplot() + autolayer(test)
+```
+
+
+```{r}
+accuracy(f1 , test)
+```
+
+## comments : 
+
+no the best of results needs some reflexion !!
