@@ -3,9 +3,8 @@ title: "time series"
 author: "Ayoub Asri"
 date: "2024-03-26"
 output: 
-  html_document:
+  pdf_document:
     toc: true
-    float_toc: true
 ---
 
 ```{r setup, include=FALSE}
@@ -21,7 +20,9 @@ library(tidyverse)
 ## data
 
 ```{r}
-data <- read_csv("./data/data_article/hourly_5y_data.csv")
+a <- getwd()
+file <- paste(str_remove(a,"/time series ideas"),"/data/data_article/hourly_5y_data.csv",sep ="")
+data <- read_csv(file)
 ```
 
 ## time series packages
