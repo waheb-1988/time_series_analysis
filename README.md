@@ -1,4 +1,5 @@
 # time_series_analysis https://www.kaggle.com/code/ludovicocuoghi/electric-production-forecast-lstm-sarima-mape-2-5/notebook
+# https://www.kaggle.com/code/neomatrix369/everything-you-can-do-with-a-time-series-stocks
 
 # file for time series in r 
 # https://rpubs.com/mr148/303786
