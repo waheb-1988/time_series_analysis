@@ -1,0 +1,401 @@
+---
+title: "DL"
+author: "Ayoub Asri"
+date: "2024-03-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## second idea :
+
+### helper functions
+
+```{r}
+# normalization 
+
+get_scaling_factors <- function(data){
+  out <- c(mean = mean(data), sd = sd(data))
+  return(out)
+}
+
+normalize_data <- function(data, scaling_factors, reverse = FALSE) {
+  
+  if (reverse) temp <- (data * scaling_factors[2]) + scaling_factors[1]
+  else temp <- (data - scaling_factors[1]) / scaling_factors[2]
+  
+  out <- temp %>% as.matrix()
+  return(out)
+}
+
+## kerasize
+
+kerasize_data <- function(data, x = TRUE, lag = 12, pred = 12) {
+  
+  if (x) {
+    
+    temp <- sapply(
+      1:(length(data) - lag - pred + 1)
+      ,function(x) data[x:(x + lag - 1), 1]
+    ) %>% t()
+    
+    out <- array(
+      temp %>% unlist() %>% as.numeric()
+      ,dim = c(nrow(temp), lag, 1)
+    )
+    
+  }  else {
+    
+    if (pred == 1){
+    temp <- sapply(
+      (1 + lag):(length(data) - pred + 1)
+      ,function(x) data[x:(x + pred - 1), 1]
+    ) %>% t()
+    
+    out <- array(
+      temp %>% unlist() %>% as.numeric()
+      ,dim = c(ncol(temp), pred, 1)
+    )
+    } else {
+       temp <- sapply(
+      (1 + lag):(length(data) - pred + 1)
+      ,function(x) data[x:(x + pred - 1), 1]
+    ) %>% t()
+    
+    out <- array(
+      temp %>% unlist() %>% as.numeric()
+      ,dim = c(nrow(temp), pred, 1)
+    )
+    }
+  }
+  
+  return(out)
+  
+}
+
+
+# kerasize_pred_input <- function(data, lag = 12, pred = 12, n = 1){
+#   temp <- sapply(
+#       1:(length(data) - lag - pred + 1)
+#       ,function(x) data[x:(x + lag - 1), 1]
+#     ) %>% t()
+#     
+#     out <- array(
+#       temp %>% unlist() %>% as.numeric()
+#       ,dim = c(nrow(temp), lag, 1)
+#     )
+#     return(out)
+# }
+
+
+```
+
+you can change this 
+
+```{r}
+lstm_build_model <- function(x, y, units1 = 50, units2 = 50,  batch = 1, epochs = 20, rate = 0.5, seed = 2137){
+  
+  lag = dim(x)[2]
+  
+  lstm_model <- keras_model_sequential()
+
+  lstm_model %>%
+    layer_lstm(units = units1,input_shape = c(lag,1)
+               ,return_sequences = TRUE) %>%
+    layer_dropout(rate = rate) %>%
+    layer_lstm(units = units2
+               ,return_sequences = TRUE) %>%
+    layer_dropout(rate = rate) %>%
+    time_distributed(layer_dense(units = 1))
+
+  lstm_model %>%
+    compile(loss = 'mse'
+            ,optimizer = 'adam'
+            ,metrics = 'mean_squared_error')
+
+  tensorflow::set_random_seed(seed)
+  lstm_model %>% fit(
+    x = x
+    ,y = y
+    ,batch_size = batch
+    ,epochs = epochs
+    ,verbose = 1
+    ,shuffle = FALSE)
+  
+  out <- list(
+    model = lstm_model
+    ,x = x
+    ,batch = batch
+    ,lag = lag
+    ,pred = dim(y)[2]
+  )
+  return(out)
+
+}
+```
+
+```{r}
+lstm_forecast <- function(x_test, model, scaling_factors){
+  
+  batch <- model$batch
+  
+  temp <- model$model %>%
+    predict(x_test, batch_size = batch) %>% 
+    .[, , 1] %>%
+    normalize_data(scaling_factors = scaling_factors, reverse = TRUE)
+  
+  out <- list(
+    forecast = temp
+    ,scaling_factors = scaling_factors
+  )
+  
+  return(out)
+  
+}
+
+## this function is messy I can clean it later
+
+forecast_transform <- function(data, model, forecast, x_test, data_test){
+  
+  lag <- model$lag
+  
+  freq <- periodicity(data)$scale
+  frequency <- case_when(
+    freq == 'weekly' ~ 52
+    ,freq == 'monthly' ~ 12
+   , freq == 'quarterly' ~ 4
+    ,freq == 'yearly' ~ 1
+   , freq == 'hourly' ~ 24
+  )
+  
+  dates <- index(data)
+  date_start <- c(year(min(dates)), month(min(dates)), day(min(dates)), hour(min(dates)))
+  date_end <- c(year(max(dates)), month(max(dates)), day(max(dates)), hour(min(dates)))
+  
+  date_start_shifted <- case_when(
+    freq == 'weekly' ~ min(dates) %m+% weeks(lag)
+    ,freq == 'monthly' ~ min(dates) %m+% months(lag)
+    ,freq == 'quarterly' ~ min(dates) %m+% months(3*lag)
+    ,freq == 'yearly' ~ min(dates) %m+% years(lag)
+    , freq == 'hourly' ~ min(dates) %m+% hours(lag)
+    )
+  date_start_shifted <- c(year(date_start_shifted), month(date_start_shifted), day(date_start_shifted), hour(date_start_shifted))
+  
+  date_end_shifted <- case_when(
+    freq == 'weekly' ~ max(dates) %m+% weeks(1)
+    ,freq == 'monthly' ~ max(dates) %m+% months(1)
+    ,freq == 'quarterly' ~ max(dates) %m+% months(3)
+    ,freq == 'yearly' ~ max(dates) %m+% years(1)
+    , freq == 'hourly' ~ max(dates) %m+% hours(1)
+    )
+  date_end_shifted <- c(year(date_end_shifted), month(date_end_shifted), day(date_end_shifted), hour(date_end_shifted))
+
+  fitted <- predict(model$model, model$x, batch_size = model$batch) %>% .[, , 1]
+  
+  if (dim(fitted)[2] > 1) {
+    fitted <- c(fitted[, 1], fitted[dim(fitted)[1], 2:dim(fitted)[2]])
+  } else {
+    fitted <- fitted[, 1]
+  }
+  
+  fitted <- normalize_data(fitted, forecast$scaling_factors, reverse = TRUE)
+  fitted <- ts(fitted, start = date_start_shifted, deltat = 1/frequency)
+  
+  lstm_forecast <- ts(forecast$forecast, start = date_end_shifted, deltat = 1/frequency)
+  
+  data_trimmed <- data[(model$lag+1):nrow(data)] %>% ts(start = date_start_shifted
+                                                        ,deltat = 1/frequency)
+  
+  fitted_test <- predict(model$model, x_test, batch_size = model$batch) %>% .[, , 1]
+  
+  if (dim(fitted)[2] > 1) {
+    fitted_test <- c(fitted_test[, 1], fitted_test[dim(fitted_test)[1], 2:dim(fitted_test)[2]])
+  } else {
+    fitted_test <- fitted_test[, 1]
+  }
+  
+  fitted_test <- normalize_data(fitted_test, forecast$scaling_factors, reverse = TRUE)
+  fitted_test <- ts(fitted_test, start = date_start_shifted, deltat = 1/frequency)
+  
+ 
+  lag <- model$lag
+  
+  freq <- periodicity(data_test)$scale
+  frequency <- case_when(
+    freq == 'weekly' ~ 52
+    ,freq == 'monthly' ~ 12
+   , freq == 'quarterly' ~ 4
+    ,freq == 'yearly' ~ 1
+   , freq == 'hourly' ~ 24
+  )
+  
+  dates <- index(data_test)
+  date_start <- c(year(min(dates)), month(min(dates)), day(min(dates)), hour(min(dates)))
+  date_end <- c(year(max(dates)), month(max(dates)), day(max(dates)), hour(min(dates)))
+  
+  date_start_shifted <- case_when(
+    freq == 'weekly' ~ min(dates) %m+% weeks(lag)
+    ,freq == 'monthly' ~ min(dates) %m+% months(lag)
+    ,freq == 'quarterly' ~ min(dates) %m+% months(3*lag)
+    ,freq == 'yearly' ~ min(dates) %m+% years(lag)
+    , freq == 'hourly' ~ min(dates) %m+% hours(lag)
+    )
+  date_start_shifted <- c(year(date_start_shifted), month(date_start_shifted), day(date_start_shifted), hour(date_start_shifted))
+  
+  date_end_shifted <- case_when(
+    freq == 'weekly' ~ max(dates) %m+% weeks(1)
+    ,freq == 'monthly' ~ max(dates) %m+% months(1)
+    ,freq == 'quarterly' ~ max(dates) %m+% months(3)
+    ,freq == 'yearly' ~ max(dates) %m+% years(1)
+    , freq == 'hourly' ~ max(dates) %m+% hours(1)
+    )
+  date_end_shifted <- c(year(date_end_shifted), month(date_end_shifted), day(date_end_shifted), hour(date_end_shifted))
+  
+  x_test2
+  test_trimmed <- data_test[(model$lag+1):nrow(data_test)] %>% ts(start = date_start_shifted
+                                                        ,deltat = 1/frequency)
+  
+  
+  out <- list(
+    model = NULL
+    ,method = 'LSTM'
+    ,mean = lstm_forecast
+    ,fitted_test = fitted_test
+    ,x_test = test_trimmed
+    ,x = data_trimmed
+    ,fitted = fitted
+    ,residuals = as.numeric(data_trimmed) - as.numeric(fitted)
+  )
+  
+  class(out) <- 'forecast'
+  
+  return(out)
+}
+```
+
+## usage on our data
+
+```{r}
+if(!require('pacman')) install.packages('pacman')
+pacman::p_load(quantmod, keras, tidyverse, timetk, lubridate, Metrics)
+```
+
+
+```{r}
+data2 <- as.xts(read_csv("hourly_5y_data.csv"))
+```
+
+```{r}
+data2
+
+```
+```{r}
+dim(data2)
+```
+
+## I did the train/test split manually I can automate it later
+
+```{r}
+scaling_factors2 <- get_scaling_factors(data2$measure)
+data_normalized2 <- normalize_data(data2$measure, scaling_factors2)
+
+x_data2 <- kerasize_data(data_normalized2,  x = TRUE,lag = 23,pred = 1)
+y_data2 <- kerasize_data(data_normalized2, x = FALSE,lag = 23,pred = 1)
+
+x_train2 <- x_data2[1:35052,,] %>% array_reshape(dim = c(35052,dim(x_data2)[2:3]))
+x_test2 <- x_data2[35053:41584,,] %>% array_reshape(dim = c(6532,dim(x_data2)[2:3]))
+
+y_train2 <- y_data2[1:35052,,]
+y_test2 <- y_data2[35053:41584,,]
+```
+
+## change values depending on need
+
+```{r}
+model2 <- lstm_build_model(x_train2, y_train2,batch = 64,units1 = 512,units2 = 256,epochs = 20,rate = 0.6)
+
+```
+```{r}
+prediction2 <- lstm_forecast(x_test2, model2, scaling_factors2)
+
+final_results2 <- forecast_transform(data2[1:(35074+23)], model2, prediction2, x_test2,data2[(35074-21):41607])
+```
+
+```{r}
+dim(final_results2$x)
+dim(final_results2$fitted)
+dim(final_results2$mean)
+dim(final_results2$fitted_test)
+dim(final_results2$x_test)
+```
+
+
+```{r}
+# final_results2$mean
+# 
+# head(final_results2$fitted, 20)
+# head(final_results2$x, 20)
+```
+```{r}
+length(final_results2$fitted)
+head(final_results2$fitted, 20)
+```
+
+```{r}
+# length(final_results2$x)
+# head(final_results2$x, 20)
+```
+
+```{r}
+head(final_results2$residuals, 20)
+```
+```{r}
+cat(paste0(
+  'Mean Absolute Error: ', mae(final_results2$x, final_results2$fitted) %>% round (2), '\n'
+  ,'Mean Absolute Percent Error: ', mape(final_results2$x, final_results2$fitted) %>% round (4), '\n'
+  ,'Root Mean Squared Error: ', rmse(final_results2$x, final_results2$fitted) %>% round (2), '\n'
+  ,'R squared: ', (cor(final_results2$x, final_results2$fitted)[1])^2 %>% round (4)
+)) 
+```
+## results on test set
+
+```{r}
+cat(paste0(
+  'Mean Absolute Error: ', mae(final_results2$x_test, final_results2$fitted_test) %>% round (2), '\n'
+  ,'Mean Absolute Percent Error: ', mape(final_results2$x_test, final_results2$fitted_test) %>% round (4), '\n'
+  ,'Root Mean Squared Error: ', rmse(final_results2$x_test, final_results2$fitted_test) %>% round (2), '\n'
+  ,'R squared: ', (cor(final_results2$x_test, final_results2$fitted_test)[1])^2 %>% round (4)
+)) 
+```
+```{r}
+tibble(x_test = final_results2$x_test %>% as.vector(),
+       fitted_test = final_results2$fitted_test %>% as.vector(),
+       x = 1:6532) %>% 
+  ggplot() +
+  geom_line(aes(x = x , y = x_test), col = "blue") +
+  geom_line(aes(x = x, y = fitted_test), col = "red") + 
+  theme_bw()
+```
+
+
+add aesthetics later
+
+```{r}
+df1 <- tibble(x1 = final_results2$x %>% as.vector(),
+       fitted = final_results2$fitted %>% as.vector(),
+       x = 1:35074) 
+df2 <- tibble(x_test = final_results2$x_test %>% as.vector(),
+       fitted_test = final_results2$fitted_test %>% as.vector(),
+       x = (35074+1):(35074+6532))
+df1 %>% 
+  ggplot() +
+  geom_line(aes(x = x , y = x1), col = "blue") +
+  geom_line(aes(x = x, y = fitted), col = "red")+
+  geom_line(data = df2, aes(x = x , y = x_test), col = "green") +
+  geom_line(data = df2, aes(x = x, y = fitted_test), col = "yellow")+
+  theme_bw()
+```
+
